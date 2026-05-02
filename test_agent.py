@@ -1,6 +1,6 @@
 from app.agent import run_agent
+from app.database import log_courier_result
 
-# Test couriers with different risk levels
 couriers = [
     {
         "courier_id": 1,
@@ -11,7 +11,8 @@ couriers = [
         "risk_score": 0.0,
         "risk_level": "",
         "intervention_type": "",
-        "outreach_message": ""
+        "outreach_message": "",
+        "message_sent": False
     },
     {
         "courier_id": 2,
@@ -22,7 +23,8 @@ couriers = [
         "risk_score": 0.0,
         "risk_level": "",
         "intervention_type": "",
-        "outreach_message": ""
+        "outreach_message": "",
+        "message_sent": False
     },
     {
         "courier_id": 3,
@@ -33,7 +35,8 @@ couriers = [
         "risk_score": 0.0,
         "risk_level": "",
         "intervention_type": "",
-        "outreach_message": ""
+        "outreach_message": "",
+        "message_sent": False
     }
 ]
 
@@ -42,7 +45,12 @@ print("=== Courier Retention Agent Running ===\n")
 for courier in couriers:
     print(f"Processing Courier {courier['courier_id']}...")
     result = run_agent(courier)
+    
+    # Log to database
+    log_courier_result(result)
+    print(f"Logged to database")
+    
     print(f"Risk: {result['risk_level']} ({result['risk_score']})")
     print(f"Intervention: {result['intervention']}")
-    print(f"Message: {result['message']}")
+    print(f"Message sent: {result['message_sent']}")
     print("-" * 50)
