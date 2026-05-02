@@ -1,19 +1,25 @@
-from dotenv import load_dotenv
-load_dotenv()
+import os
 import requests
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
+from twilio.rest import Client
 from typing import TypedDict
 
-# Initialize Claude
-import os
+load_dotenv()
 
+# Initialize Claude
 llm = ChatAnthropic(
     model="claude-opus-4-6",
     api_key=os.environ.get("ANTHROPIC_API_KEY")
 )
 
-# Your FastAPI URL
+# Initialize Twilio
+twilio_client = Client(
+    os.environ.get("TWILIO_ACCOUNT_SID"),
+    os.environ.get("TWILIO_AUTH_TOKEN")
+)
+
 API_URL = "http://127.0.0.1:8000/predict"
 
 # Define what flows through the agent
@@ -27,6 +33,7 @@ class CourierState(TypedDict):
     risk_level: str
     intervention_type: str
     outreach_message: str
+    message_sent: bool
 
 # Node 1 — Call your FastAPI model
 def get_risk_score(state: CourierState) -> CourierState:
@@ -37,11 +44,9 @@ def get_risk_score(state: CourierState) -> CourierState:
         "avg_earnings_last_week": state["avg_earnings_last_week"],
         "support_tickets_raised": state["support_tickets_raised"]
     })
-    
     result = response.json()
     state["risk_score"] = result["risk_score"]
     state["risk_level"] = result["risk_level"]
-    
     print(f"Risk score fetched: {result['risk_score']} ({result['risk_level']})")
     return state
 
@@ -53,7 +58,6 @@ def decide_intervention(state: CourierState) -> CourierState:
         state["intervention_type"] = "nudge"
     else:
         state["intervention_type"] = "none"
-    
     print(f"Intervention decided: {state['intervention_type']}")
     return state
 
@@ -62,7 +66,7 @@ def generate_message(state: CourierState) -> CourierState:
     if state["intervention_type"] == "none":
         state["outreach_message"] = "No outreach needed."
         return state
-    
+
     prompt = f"""
     You are a courier engagement specialist at Uber.
     
@@ -76,11 +80,31 @@ def generate_message(state: CourierState) -> CourierState:
     If incentive: offer a bonus for completing trips this week.
     If nudge: remind them of high demand in their area.
     """
-    
+
     response = llm.invoke(prompt)
     state["outreach_message"] = response.content
-    
     print(f"Message generated for courier {state['courier_id']}")
+    return state
+
+# Node 4 — Send WhatsApp message via Twilio
+def send_whatsapp(state: CourierState) -> CourierState:
+    if state["intervention_type"] == "none":
+        state["message_sent"] = False
+        print(f"No message sent for courier {state['courier_id']} - low risk")
+        return state
+
+    try:
+        message = twilio_client.messages.create(
+            from_=os.environ.get("TWILIO_WHATSAPP_FROM"),
+            to=os.environ.get("COURIER_WHATSAPP_TO"),
+            body=state["outreach_message"]
+        )
+        state["message_sent"] = True
+        print(f"WhatsApp sent! Message SID: {message.sid}")
+    except Exception as e:
+        print(f"Failed to send WhatsApp: {e}")
+        state["message_sent"] = False
+
     return state
 
 # Build the agent graph
@@ -89,11 +113,13 @@ graph = StateGraph(CourierState)
 graph.add_node("get_risk_score", get_risk_score)
 graph.add_node("decide_intervention", decide_intervention)
 graph.add_node("generate_message", generate_message)
+graph.add_node("send_whatsapp", send_whatsapp)
 
 graph.set_entry_point("get_risk_score")
 graph.add_edge("get_risk_score", "decide_intervention")
 graph.add_edge("decide_intervention", "generate_message")
-graph.add_edge("generate_message", END)
+graph.add_edge("generate_message", "send_whatsapp")
+graph.add_edge("send_whatsapp", END)
 
 agent = graph.compile()
 
@@ -105,5 +131,6 @@ def run_agent(courier_data: dict):
         "risk_score": result["risk_score"],
         "risk_level": result["risk_level"],
         "intervention": result["intervention_type"],
-        "message": result["outreach_message"]
+        "message": result["outreach_message"],
+        "message_sent": result["message_sent"]
     }
